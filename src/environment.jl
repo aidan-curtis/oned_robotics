@@ -203,7 +203,12 @@ function generate_image_obs(p::Env1D, s::Env1DState)
     rcoord = tf(s.robot_loc)
     ahlow = convert(Int64, bound(HEIGHT/2.0-AGENT_SIZE, 1, max_coord))
     ahhigh = convert(Int64, bound(HEIGHT/2.0+AGENT_SIZE, 1, max_coord))
-    state_im[:, ahlow:ahhigh, rcoord-AGENT_SIZE:rcoord+AGENT_SIZE] .= repeat(cv, 1, 1, AGENT_SIZE*2+1)
+    chlow = convert(Int64, bound(rcoord-AGENT_SIZE, 1, max_coord))
+    chhigh = convert(Int64, bound(rcoord+AGENT_SIZE, 1, max_coord))
+
+  
+    state_im[:, ahlow:ahhigh, chlow:chhigh] .= repeat(cv, 1, 1, chhigh-chlow+1)
+
     return state_im
     
 end
