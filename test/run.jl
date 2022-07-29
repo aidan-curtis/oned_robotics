@@ -13,9 +13,10 @@ using POMDPPolicies
 using Random
 using D3Trees
 using POMCPOW
+using Images
 using BasicPOMCP
 
-max_steps = 10
+max_steps = 1000
 
 # solver = POMCPOWSolver(criterion=MaxUCB(20.0))
 # pomdp = BabyPOMDP() # from POMDPModels
@@ -41,14 +42,27 @@ function solve(solver::POMDPPolicySolver, pomdp::POMDPs.POMDP)
 end
 
 problem = POMDPProblem(Env1DGen(), false, 10)
-algo = POMDPAlgo(POMCPOWSolver(criterion=MaxUCB(20.0)), false)
+algo = POMDPAlgo(POMCPOWSolver(criterion=MaxUCB(20.0), tree_queries=10), false)
 pomdp = problem.pomdp()
 planner = solve(algo.solver, pomdp)
 hr = HistoryRecorder(max_steps=max_steps)
-pomcpow_history = simulate(hr, pomdp, planner)
+pomcpow_hist = simulate(hr, pomdp, planner)
 rollout = []
 
-for (s, a, sp, o, r) in pomcpow_hist
+tmp_dir = "temp_images"
+if (isdir(tmp_dir))
+    rm(tmp_dir, recursive=true)
+end
+mkdir(tmp_dir)
+
+for (index, (s, a, sp, o, r)) in enumerate(pomcpow_hist)
     push!(rollout, Dict("action"=>a, "state"=>s, "state_prime"=>sp, "obs"=>o, "reward"=>r))
-    @show s, a, sp, o, r
+    println("==============")
+    println("State: $(s)")
+    println("Action: $(a)")
+    println("Obs: $(o)")
+    println("Reward: $(r)")
+    println("State Prime: $(sp)")
+    image_obs = generate_image_obs(pomdp, s)
+    save("temp_images/robotics1d-$(index).png", colorview(RGB, image_obs))
 end
