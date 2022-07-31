@@ -15,7 +15,14 @@ include("environment.jl")
 export 
     Env1D,
     Env1DGen,
-    generate_image_obs
-
+    generate_image_obs,
+    Env1DAction,
+    Env1DState,
+    Env1DObject,
+    Interval,
+    Color,
+    RED,
+    GREEN,
+    BLUE
 
 end # module

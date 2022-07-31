@@ -11,14 +11,6 @@ struct Interval
     hi::Float64
 end
 
-RED = Color(1.0, 0, 0)
-GREEN = Color(0, 1.0, 0)
-BLUE = Color(0, 0, 1.0)
-
-function sample_color(rng)
-    return rand(rng, USparseCat([RED, GREEN, BLUE]))
-end
-
 struct Env1DObject
     pos::Float64
     size::Float64
@@ -58,13 +50,9 @@ struct Env1DObs
     success::Bool
 end
 
-function EmptyEnv1DObs()
-    return Env1DObs([], false)
-end
-
 struct Env1DAction
     type::Symbol
-    target_loc::Float64
+    continuous::Float64
 end
 
 
@@ -80,6 +68,15 @@ MAX_N_OBJS = 3
 MIN_SIZE = 1
 MAX_SIZE = 3
 ABUT_PROB = 0.5
+RED = Color(1.0, 0, 0)
+GREEN = Color(0, 1.0, 0)
+BLUE = Color(0, 0, 1.0)
+PICK_TOLERANCE = 0.5
+
+function sample_color(rng)
+    return rand(rng, USparseCat([RED, GREEN, BLUE]))
+end
+
 
 function Env1D()
     return Env1D(0.95)
@@ -199,7 +196,11 @@ function generate_image_obs(p::Env1D, s::Env1DState)
     end
 
     # Agent
-    cv = color_vector(RED, 1.0)
+    if (isnothing(s.grasped))
+        cv = color_vector(GREEN, 1.0)
+    else
+        cv = color_vector(RED, 1.0)
+    end
     rcoord = tf(s.robot_loc)
     ahlow = convert(Int64, bound(HEIGHT/2.0-AGENT_SIZE, 1, max_coord))
     ahhigh = convert(Int64, bound(HEIGHT/2.0+AGENT_SIZE, 1, max_coord))
@@ -229,19 +230,18 @@ function is_look_action(act::Env1DAction)
 end
 
 function is_push_action(act::Env1DAction)
-    return act.type == :push_from_top ||
-           act.type == :push_and_look1 ||
-           act.type == :push_and_look2
+    return act.type == :push ||
+           act.type == :push_and_look
 end
 
 function overlaps_interval(reg, range)
-    return !isnothing(interval_intersection(reg, range))
+    return interval_size(interval_intersection(reg, range))>0
 end
 
 function collision_free(s)
-    for o in s.objects 
-        if !isnothing(o.pos)
-            if (overlaps_interval(Interval(s.robot_loc-s.grasped.size/2.0, s.robot_loc+s.grasped.size/2.0), range(o)))
+    for o in s.objects
+        if ((!isnothing(s.grasped)) && s.objects[s.grasped] != o)
+            if (overlaps_interval(Interval(s.robot_loc-s.objects[s.grasped].size/2.0, s.robot_loc+s.objects[s.grasped].size/2.0), range(o)))
                 return false
             end
         end
@@ -250,12 +250,12 @@ function collision_free(s)
 end
 
 function obj_at(s::Env1DState)
-    for o in self.objects
-        if point_in_interval(pos, range(o))
-            return o
+    for (oi, o) in enumerate(s.objects)
+        if point_in_interval(s.robot_loc, range(o))
+            return oi
         end
     end
-    return None
+    return nothing
 end
 
 
@@ -326,9 +326,8 @@ function generate_observation(s::Env1DState, rng)
     view_field = Interval(s.robot_loc-FOV/2, s.robot_loc+FOV/2)
     obs_field = interval_intersection(WORKSPACE, view_field)
     obs_obj_props = []
-    fail = false
     for o in s.objects
-        if isnothing(o.pos)
+        if isnothing(!isnothing(s.grasped))
             continue  # Object is being held
         end
         overlap = interval_intersection(range(o), obs_field)
@@ -358,7 +357,46 @@ function generate_observation(s::Env1DState, rng)
             push!(obs_obj_props, generate_obj_obs(o, Interval(p, overlap.hi), obs_field))
         end
     end
-    return obs_obj_props, fail
+    return obs_obj_props
+end
+
+function overlapper(s::Env1DState, orig_obj_index::Int64, zone::Interval, mode::Symbol)
+    filtered = [(xi, x) for (xi, x) in enumerate(s.objects) if xi != s.grasped]
+    sorted = sort(collect(filtered), by = x->x[2].pos)
+    sorted = (mode == :rightmost) ? reverse(sorted) : sorted
+    for (oi, o) in sorted
+        if orig_obj_index != oi && overlaps_interval(zone, range(o))
+            return oi
+        end
+    end
+    return nothing
+end
+
+function push_obj(s::Env1DState, obj_index::Int64, delta::Float64)
+    new_objects = deepcopy(s.objects)
+    obj = s.objects[obj_index]
+    # move this object, plus others it might push as well
+    if (delta > 0)
+        # pushing to the right
+        danger_zone = Interval(hi(obj), hi(obj) + delta)
+        # get leftmost object that overlaps the danger zone
+        pushed_o = overlapper(s, obj_index, danger_zone, :leftmost)
+        if !isnothing(pushed_o)
+            new_objects = push_obj(s, pushed_o, danger_zone.hi -lo(new_objects[pushed_o]))
+        end
+    else
+        # pushing to the left
+        danger_zone = Interval(lo(obj) + delta, lo(obj))
+        # get rightmost object that overlaps the danger zone
+        pushed_o = overlapper(s, obj_index, danger_zone, :rightmost)
+        if !isnothing(pushed_o)
+            new_objects = push_obj(s, pushed_o, danger_zone.lo -hi(new_objects[pushed_o]))
+        end
+    end
+
+    # Move the actual object
+    new_objects[obj_index] = Env1DObject(obj.pos + delta, obj.size, obj.color)
+    return new_objects
 end
 
 function POMDPs.gen(p::Env1D, s::Env1DState, act::Env1DAction, rng) 
@@ -366,21 +404,26 @@ function POMDPs.gen(p::Env1D, s::Env1DState, act::Env1DAction, rng)
     # Next state default values
     next_grasped = s.grasped
     sp_robot_loc = s.robot_loc
-    next_objects = s.objects
+    next_objects = deepcopy(s.objects)
 
     # Observation default values
-    fail = false
     obs_obj_props = []
 
     # Default reward
     reward = 0
+    fail = false
 
     if (is_look_action(act))
-        obs_obj_props, fail = generate_observation(s, rng)
+        obs_obj_props = generate_observation(s, rng)
     elseif act.type == :move
-        sp_robot_loc = act.target_loc
+        sp_robot_loc = act.continuous
+        if (!isnothing(s.grasped))
+            next_objects[s.grasped] = Env1DObject(sp_robot_loc, 
+                                                  next_objects[s.grasped].size, 
+                                                  next_objects[s.grasped].color)
+        end
     elseif act.type == :pick
-        if isnothing(s.grasped)
+        if !isnothing(s.grasped)
             # If we are already holding something, then fail
             fail = true
         else
@@ -390,37 +433,30 @@ function POMDPs.gen(p::Env1D, s::Env1DState, act::Env1DAction, rng)
             for (oi, o) in enumerate(s.objects)
                 if close(o.pos, s.robot_loc, PICK_TOLERANCE)
                     next_grasped = oi
-                    next_objects[oi].pos = nothing
+                    next_objects[oi] = Env1DObject(s.robot_loc, next_objects[oi].size, next_objects[oi].color)
                     fail = false
                 end
             end
             # if obs is fail, Attempted to pick but not near center of any obj')
         end
     elseif act.type == :place
-        obs = EmptyEnv1DObs()
-        # No arguments
-        # If there is free space under it, then it is placed whp, else it either stays in the gripper or slides sideways into a spot
         if isnothing(s.grasped) || !collision_free(s)
             fail = true
-            # print("Attempted to place, but not holding anything or Attempted to place, but space not clear")
         else
-            next_objects[s.grasped].pos = s.robot_loc
             next_grasped = nothing
-            fail = false
         end
     elseif (is_push_action(act))
-        sp_robot_loc = act.target_loc
-        touched_o = obj_at(s, sp_robot_loc)
-        if isnothing(touched_o)
+        delta = act.continuous
+        touched_oi = obj_at(s)
+        if isnothing(touched_oi)
             # If we are not touching something, then fail
             fail = true
-            print("Attempted to push, but not touching anything.")
         else
-            self.push_obj(touched_o, p2-p1)
-            fail = false
+            next_objects = push_obj(s, touched_oi, delta)
         end
-        if act.type == :push_and_look1 || act.type == :push_and_look2
-            obs_obj_props, fail = generate_observation(s, rng)
+
+        if act.type == :push_and_look
+            obs_obj_props = generate_observation(s, rng)
         end
     end
 
