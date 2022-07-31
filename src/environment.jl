@@ -21,9 +21,17 @@ struct Env1DState
     robot_loc::Float64
     grasped::Union{Nothing, Int64} # Object index or nothing
     objects::Vector{Env1DObject}
+    terminal::Bool
 end
 
-Base.copy(s::Env1DState) = Env1DState(s.robot_loc, s.grasped, copy(s.objects))
+function Env1DState(robot_loc::Float64,
+                    grasped::Union{Nothing, Int64}, # Object index or nothing
+                    objects::Vector{Env1DObject})
+    return Env1DState(robot_loc, grasped, objects, false)
+end
+
+
+Base.copy(s::Env1DState) = Env1DState(s.robot_loc, s.grasped, copy(s.objects), s.terminal)
 
 function lo(o::Env1DObject)
     return o.pos-o.size/2.0
@@ -45,18 +53,17 @@ struct ObjectProperties
     hi_occluded::Float64
 end
 
-struct Env1DObs
-    properties::Vector{ObjectProperties}
-    success::Bool
-end
+# struct Env1DObs
+#     properties::Vector{ObjectProperties}
+#     success::Bool
+# end
 
 struct Env1DAction
     type::Symbol
     continuous::Float64
 end
 
-
-mutable struct Env1D <: POMDPs.POMDP{Env1DState, Env1DAction, Env1DObs}
+mutable struct Env1D <: POMDPs.POMDP{Env1DState, Env1DAction, Matrix{Float64}}
     discount_factor::Float64
 end
 
@@ -89,6 +96,9 @@ end
 discount(p::Env1D) = p.discount_factor
 isterminal(::Env1D, s::Env1DState) = false
 
+function isterminal(s::Env1DState)
+    return s.terminal
+end
 
 function USparseCat(values)
     return SparseCat(values, [1/length(values) for _ in 1:length(values)])
@@ -162,7 +172,7 @@ function initialstate(p::Env1D)
         end
 
         agent_pos = rand(rng, Distributions.Uniform(WORKSPACE.lo, WORKSPACE.hi))
-        return Env1DState(agent_pos, nothing, objects)
+        return Env1DState(agent_pos, nothing, objects, false)
     end
 end
 
@@ -176,7 +186,13 @@ function bound(v, minv, maxv)
     return max(min(v, maxv), minv)
 end
 
-function generate_image_obs(p::Env1D, s::Env1DState)
+function generate_obs(p::Env1D, s::Env1DState)
+    view_field = Interval(s.robot_loc-FOV/2, s.robot_loc+FOV/2)
+    state_image = generate_state_image(p, s)
+    return state_image[view_field.lo:view_field.hi, :, :]
+end
+
+function generate_state_image(p::Env1D, s::Env1DState)
 
     SCALE = 10
     HEIGHT = 40
@@ -214,12 +230,17 @@ function generate_image_obs(p::Env1D, s::Env1DState)
     
 end
 
-function pdf(d::Normal{Float64}, o::Env1DObs)
-    pdf(d, 0)
-end
+# TODO
+# function pdf(d::Normal{Float64}, o::Env1DObs)
+#     pdf(d, 0)
+# end
 
 function observation(p::Env1D, a::Env1DAction, sp::Env1DState)
-    return Normal(sp.robot_loc, 0.1)
+    if (a == :look || a == :push_and_look)
+        return Deterministic(generate_obs(p, sp))
+    else
+        return Deterministic([])
+    end
 end
 
 function is_look_action(act::Env1DAction)
@@ -256,16 +277,6 @@ function obj_at(s::Env1DState)
         end
     end
     return nothing
-end
-
-
-
-function generate_obj_obs(o::Env1DObject, overlap::Interval, obs_field::Interval)
-    return ObjectProperties(o.color,
-                    overlap.lo,
-                    lo(o) < obs_field.lo - 1e-10, # Why?
-                    overlap.hi,
-                    hi(o) > obs_field.hi + 1e-10)
 end
 
 function touching_objects(s::Env1DState, o::Env1DObject)
@@ -322,43 +333,52 @@ function interval_union(interval1::Interval, interval2::Interval)
             max(interval1.hi, interval2.hi)]
 end
 
-function generate_observation(s::Env1DState, rng)
-    view_field = Interval(s.robot_loc-FOV/2, s.robot_loc+FOV/2)
-    obs_field = interval_intersection(WORKSPACE, view_field)
-    obs_obj_props = []
-    for o in s.objects
-        if isnothing(!isnothing(s.grasped))
-            continue  # Object is being held
-        end
-        overlap = interval_intersection(range(o), obs_field)
-        if interval_size(overlap) < MIN_OBJECT_DETECT_SIZE 
-            continue
-        end
-        push!(obs_obj_props, generate_obj_obs(o, overlap, obs_field))
-        # Get objects to the left and right of me and make extra detections
-        ool, oor = touching_objects(s, o)
-        if !isnothing(ool) && ool.color == o.color
-            l_overlap = interval_intersection(interval_union(range(ool), range(o)), obs_field)
-            if (interval_size(l_overlap) >= MIN_OBJECT_DETECT_SIZE)
-                push!(obs_obj_props, generate_obj_obs(o, l_overlap, obs_field))
-            end
-        end
-        if !isnothing(oor) && oor.color == o.color
-            r_overlap = interval_intersection(interval_union(range(o),  range(oor)), obs_field)
-            if (interval_size(r_overlap) >= MIN_OBJECT_DETECT_SIZE)
-                push!(obs_obj_props, generate_obj_obs(o, r_overlap, obs_field))
-            end
-        end
-        if (rand(rng, Distributions.Uniform(0, 1)) < OBJ_FRAGMENT_PROB)
-            # Add two new detections corresponding to this object
-            # Could also consider removing the original detection, but not doing that for now
-            p = rand(rng, Distributions.Uniform(overlap.lo, overlap.hi))
-            push!(obs_obj_props, generate_obj_obs(o, Interval(overlap.lo, p), obs_field))
-            push!(obs_obj_props, generate_obj_obs(o, Interval(p, overlap.hi), obs_field))
-        end
-    end
-    return obs_obj_props
-end
+
+# function generate_obj_obs(o::Env1DObject, overlap::Interval, obs_field::Interval)
+#     return ObjectProperties(o.color,
+#                     overlap.lo,
+#                     lo(o) < obs_field.lo - 1e-10, # Why?
+#                     overlap.hi,
+#                     hi(o) > obs_field.hi + 1e-10)
+# end
+
+# function generate_observation(s::Env1DState, rng)
+#     view_field = Interval(s.robot_loc-FOV/2, s.robot_loc+FOV/2)
+#     obs_field = interval_intersection(WORKSPACE, view_field)
+#     obs_obj_props = []
+#     for o in s.objects
+#         if isnothing(!isnothing(s.grasped))
+#             continue  # Object is being held
+#         end
+#         overlap = interval_intersection(range(o), obs_field)
+#         if interval_size(overlap) < MIN_OBJECT_DETECT_SIZE 
+#             continue
+#         end
+#         push!(obs_obj_props, generate_obj_obs(o, overlap, obs_field))
+#         # Get objects to the left and right of me and make extra detections
+#         ool, oor = touching_objects(s, o)
+#         if !isnothing(ool) && ool.color == o.color
+#             l_overlap = interval_intersection(interval_union(range(ool), range(o)), obs_field)
+#             if (interval_size(l_overlap) >= MIN_OBJECT_DETECT_SIZE)
+#                 push!(obs_obj_props, generate_obj_obs(o, l_overlap, obs_field))
+#             end
+#         end
+#         if !isnothing(oor) && oor.color == o.color
+#             r_overlap = interval_intersection(interval_union(range(o),  range(oor)), obs_field)
+#             if (interval_size(r_overlap) >= MIN_OBJECT_DETECT_SIZE)
+#                 push!(obs_obj_props, generate_obj_obs(o, r_overlap, obs_field))
+#             end
+#         end
+#         if (rand(rng, Distributions.Uniform(0, 1)) < OBJ_FRAGMENT_PROB)
+#             # Add two new detections corresponding to this object
+#             # Could also consider removing the original detection, but not doing that for now
+#             p = rand(rng, Distributions.Uniform(overlap.lo, overlap.hi))
+#             push!(obs_obj_props, generate_obj_obs(o, Interval(overlap.lo, p), obs_field))
+#             push!(obs_obj_props, generate_obj_obs(o, Interval(p, overlap.hi), obs_field))
+#         end
+#     end
+#     return obs_obj_props
+# end
 
 function overlapper(s::Env1DState, orig_obj_index::Int64, zone::Interval, mode::Symbol)
     filtered = [(xi, x) for (xi, x) in enumerate(s.objects) if xi != s.grasped]
@@ -406,16 +426,11 @@ function POMDPs.gen(p::Env1D, s::Env1DState, act::Env1DAction, rng)
     sp_robot_loc = s.robot_loc
     next_objects = deepcopy(s.objects)
 
-    # Observation default values
-    obs_obj_props = []
-
     # Default reward
     reward = 0
     fail = false
 
-    if (is_look_action(act))
-        obs_obj_props = generate_observation(s, rng)
-    elseif act.type == :move
+    if act.type == :move
         sp_robot_loc = act.continuous
         if (!isnothing(s.grasped))
             next_objects[s.grasped] = Env1DObject(sp_robot_loc, 
@@ -454,14 +469,10 @@ function POMDPs.gen(p::Env1D, s::Env1DState, act::Env1DAction, rng)
         else
             next_objects = push_obj(s, touched_oi, delta)
         end
-
-        if act.type == :push_and_look
-            obs_obj_props = generate_observation(s, rng)
-        end
     end
-
-    obs = Env1DObs(obs_obj_props, !fail)
-    sp = Env1DState(sp_robot_loc, next_grasped, next_objects)
+    
+    sp = Env1DState(sp_robot_loc, next_grasped, next_objects, fail)
+    obs = observation(p, act, sp)
 
     # The goal is placing an object of a certain color at a certain location within an interval
     return (sp=sp, o=obs, r=reward)

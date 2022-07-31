@@ -16,7 +16,7 @@ function gen(s::Env1DState, a::Env1DAction)
     return sp, o, r
 end
 
-NO_OBJECTS = []
+NO_OBJECTS = Vector{Env1DObject}()
 SOME_OBJECTS = [
     Env1DObject(5, 2, RED),
     Env1DObject(0, 1, GREEN)
@@ -26,7 +26,7 @@ SOME_OBJECTS = [
 
 @testset "Move" begin
     @testset "Move while not holding" begin
-        s = Env1DState(0, nothing, [])
+        s = Env1DState(0.0, nothing, NO_OBJECTS)
         a = Env1DAction(:move, 5.0)
         sp, _, _ = gen(s, a)
         @test sp.robot_loc == 5.0
@@ -35,7 +35,7 @@ SOME_OBJECTS = [
     end
 
     @testset "Move while holding" begin
-        s = Env1DState(0, 1, SOME_OBJECTS)
+        s = Env1DState(0.0, 1, SOME_OBJECTS)
         a = Env1DAction(:move, 2.0)
         sp, _, _ = gen(s, a)
         @test sp.robot_loc == 2.0
@@ -49,7 +49,7 @@ end
         s = Env1DState(0.0, 1, SOME_OBJECTS)
         a = Env1DAction(:pick, 0.0)
         sp, o, _ = gen(s, a)
-        @test !o.success
+        @test isterminal(sp)
         @test sp.grasped == 1
         @test sp.robot_loc == 0
     end
@@ -58,7 +58,7 @@ end
         s = Env1DState(0.0, nothing, SOME_OBJECTS)
         a = Env1DAction(:pick, 0.0)
         sp, o, _ = gen(s, a)
-        @test o.success
+        @test !isterminal(sp)
         @test sp.grasped == 2
         @test sp.objects[sp.grasped].pos == sp.robot_loc
         @test sp.robot_loc == 0.0
@@ -68,7 +68,7 @@ end
         s = Env1DState(-10.0, nothing, SOME_OBJECTS)
         a = Env1DAction(:pick, 0)
         sp, o, _ = gen(s, a)
-        @test !o.success
+        @test isterminal(sp)
         @test isnothing(sp.grasped)
         @test sp.robot_loc == -10.0
     end 
@@ -79,7 +79,7 @@ end
         s = Env1DState(8.0, 1, SOME_OBJECTS)
         a = Env1DAction(:place, 0.0)
         sp, o, _ = gen(s, a)
-        @test o.success
+        @test !isterminal(sp)
         @test isnothing(sp.grasped)
     end
 
@@ -87,14 +87,14 @@ end
         s = Env1DState(7.0, nothing, SOME_OBJECTS)
         a = Env1DAction(:place, 0.0)
         sp, o, _ = gen(s, a)
-        @test !o.success
+        @test isterminal(sp)
     end
 
     @testset "Place on other object" begin
         s = Env1DState(0.0, nothing, SOME_OBJECTS)
         a = Env1DAction(:place, 0.0)
         sp, o, _ = gen(s, a)
-        @test !o.success
+        @test isterminal(sp)
     end
 end
 
@@ -104,7 +104,7 @@ end
         s = Env1DState(-10.0, 1, SOME_OBJECTS)
         a = Env1DAction(:push, 0.0)
         sp, o, _ = gen(s, a)
-        @test !o.success
+        @test isterminal(sp)
     end
 
 
@@ -112,25 +112,25 @@ end
         s = Env1DState(-10.0, nothing, SOME_OBJECTS)
         a = Env1DAction(:push, 0.0)
         sp, o, _ = gen(s, a)
-        @test !o.success
+        @test isterminal(sp)
     end
 
     @testset "Push from top touching no contact +" begin
-        s = Env1DState(0, nothing, SOME_OBJECTS)
+        s = Env1DState(0.0, nothing, SOME_OBJECTS)
         a = Env1DAction(:push, 1.5)
         sp, o, _ = gen(s, a)
         @test sp.objects[2].pos == 1.5
         @test sp.objects[1].pos == 5.0
-        @test o.success
+        @test !isterminal(sp)
     end
 
     @testset "Push from top touching no contact -" begin
-        s = Env1DState(0, nothing, SOME_OBJECTS)
+        s = Env1DState(0.0, nothing, SOME_OBJECTS)
         a = Env1DAction(:push, -1.5)
         sp, o, _ = gen(s, a)
         @test sp.objects[2].pos == -1.5
         @test sp.objects[1].pos == 5.0
-        @test o.success
+        @test !isterminal(sp)
     end
 
     @testset "Push from top touching one object abut +" begin
@@ -138,12 +138,12 @@ end
             Env1DObject(1.5, 2, RED),
             Env1DObject(0,   1, GREEN)
         ]
-        s = Env1DState(0, nothing, OBJS)
+        s = Env1DState(0.0, nothing, OBJS)
         a = Env1DAction(:push, 1.5)
         sp, o, _ = gen(s, a)
         @test sp.objects[1].pos == 3.0
         @test sp.objects[2].pos == 1.5
-        @test o.success
+        @test !isterminal(sp)
     end
 
     @testset "Push from top touching one object abut -" begin
@@ -151,12 +151,12 @@ end
             Env1DObject(-1.5, 2, RED),
             Env1DObject(0,   1, GREEN)
         ]
-        s = Env1DState(0, nothing, OBJS)
+        s = Env1DState(0.0, nothing, OBJS)
         a = Env1DAction(:push, -1.5)
         sp, o, _ = gen(s, a)
         @test sp.objects[1].pos == -3.0
         @test sp.objects[2].pos == -1.5
-        @test o.success
+        @test !isterminal(sp)
     end
 
     @testset "Push from top touching two objects abut +" begin
@@ -165,13 +165,13 @@ end
             Env1DObject(0,   1, GREEN),
             Env1DObject(3.6, 2, RED),
         ]
-        s = Env1DState(0, nothing, OBJS)
+        s = Env1DState(0.0, nothing, OBJS)
         a = Env1DAction(:push, 1.5)
         sp, o, _ = gen(s, a)
         @test sp.objects[1].pos == 3.0
         @test sp.objects[2].pos == 1.5
         @test sp.objects[3].pos == 5.0
-        @test o.success
+        @test !isterminal(sp)
     end   
 
     @testset "Push from top touching two objects abut -" begin
@@ -180,20 +180,20 @@ end
             Env1DObject(-0.0, 1, GREEN),
             Env1DObject(-3.6, 2, RED),
         ]
-        s = Env1DState(0, nothing, OBJS)
+        s = Env1DState(0.0, nothing, OBJS)
         a = Env1DAction(:push, -1.5)
         sp, o, _ = gen(s, a)
         @test sp.objects[1].pos == -3.0
         @test sp.objects[2].pos == -1.5
         @test sp.objects[3].pos == -5.0
-        @test o.success
+        @test !isterminal(sp)
     end
 
     @testset "Push and look not touching" begin
         s = Env1DState(-10.0, nothing, SOME_OBJECTS)
         a = Env1DAction(:push_and_look, 0.0)
         sp, o, _ = gen(s, a)
-        @test !o.success
+        @test isterminal(sp)
     end
 
 end
@@ -204,11 +204,11 @@ end
             Env1DObject(1.5, 2, RED),
             Env1DObject(0,   1, GREEN)
         ]
-        s = Env1DState(0, nothing, OBJS)
+        s = Env1DState(0.0, nothing, OBJS)
         a = Env1DAction(:push_and_look, 1.5)
         sp, o, _ = gen(s, a)
         @test sp.objects[1].pos == 3.0
         @test sp.objects[2].pos == 1.5
-        @test o.success
+        @test !isterminal(sp)
     end
 end
