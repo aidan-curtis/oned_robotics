@@ -9,6 +9,7 @@ import Random:rand, rand!
 import POMDPs: action, solve, updater, actions, initialstate, gen, isterminal
 import POMDPModelTools: action_info, UnderlyingMDP, BoolDistribution, transition, observation, reward, discount
 using Random
+import Base: (==), hash
 
 include("environment.jl")
 

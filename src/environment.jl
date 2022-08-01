@@ -63,7 +63,16 @@ struct Env1DAction
     continuous::Float64
 end
 
-mutable struct Env1D <: POMDPs.POMDP{Env1DState, Env1DAction, Matrix{Float64}}
+struct Env1DObs
+    val::Array{Int64, 3}
+end
+
+Base.:(==)(x::Env1DObs, y::Env1DObs) = true
+function Base.hash(obj::Env1DObs, h::UInt)
+    return hash(obj.val, h)
+end
+
+mutable struct Env1D <: POMDPs.POMDP{Env1DState, Env1DAction, Env1DObs}
     goal_pos::Float64
     discount_factor::Float64
 end
@@ -71,7 +80,7 @@ end
 MIN_OBJECT_DETECT_SIZE = 1
 OBJ_FRAGMENT_PROB = 0.3
 WORKSPACE = Interval(-10, 10)
-FOV = 2
+FOV = 100
 MAX_N_OBJS = 3
 MIN_SIZE = 1
 MAX_SIZE = 3
@@ -85,7 +94,6 @@ GOAL_TOLERANCE = 0.5
 function sample_color(rng)
     return rand(rng, USparseCat([RED, GREEN, BLUE]))
 end
-
 
 function Env1D(goal_pos::Float64)
     return Env1D(goal_pos, 0.95)
@@ -112,7 +120,7 @@ end
 
 function actions(::Env1D) 
     return ImplicitDistribution() do rng
-        action_type = rand(rng, USparseCat([:look, :look_obj_hi, :look_obj_lo, :look_region, :move, :pick, :place]))
+        action_type = rand(rng, USparseCat([:look, :move, :pick, :place]))
         target_loc = rand(rng, Distributions.Uniform(WORKSPACE.lo, WORKSPACE.hi))
         return Env1DAction(action_type, target_loc)
     end
@@ -180,7 +188,10 @@ end
 
 
 function color_vector(c::Color, alpha::Float64=1.0)
-    return [min(c.r+1-alpha, 1.0), min(c.g+1-alpha, 1.0), min(c.b+1-alpha, 1.0)]
+    r = convert(Int64, floor(min(c.r+1-alpha, 1.0)*255))
+    g = convert(Int64, floor(min(c.g+1-alpha, 1.0)*255))
+    b = convert(Int64, floor(min(c.b+1-alpha, 1.0)*255))
+    return [r, g, b]
 end
 
 
@@ -189,22 +200,27 @@ function bound(v, minv, maxv)
 end
 
 function generate_obs(p::Env1D, s::Env1DState)
-    view_field = Interval(s.robot_loc-FOV/2, s.robot_loc+FOV/2)
     state_image = generate_state_image(p, s)
-    return state_image[view_field.lo:view_field.hi, :, :]
+    println(size(state_image, 3))
+    vf_low = bound(floor(s.robot_loc-FOV/2), 1, size(state_image, 3))
+    vf_high = bound(floor(s.robot_loc+FOV/2), 1, size(state_image, 3))
+    view_field = Interval(vf_low, vf_high)
+    println(view_field)
+    state_image[:, :, 1:convert(Int64, view_field.lo)] = state_image[:, :, 1:convert(Int64, view_field.lo)].*0
+    state_image[:, :, convert(Int64, view_field.hi):end] = state_image[:, :, convert(Int64, view_field.hi):end].*0
+    return state_image
 end
 
 function generate_state_image(p::Env1D, s::Env1DState)
 
-    SCALE = 10
     HEIGHT = 40
-    AGENT_SIZE = 5
+    AGENT_SIZE = 1
 
-    state_im = ones(3, HEIGHT, floor(Int64, interval_size(WORKSPACE) * SCALE))
+    state_im = ones(3, HEIGHT, floor(Int64, interval_size(WORKSPACE)))
     max_coord = size(state_im)[3]
 
     function tf(v::Float64)
-        return convert(Int64, bound(floor((v-WORKSPACE.lo)*SCALE), 1, max_coord))
+        return convert(Int64, bound(floor((v-WORKSPACE.lo)), 1, max_coord))
     end
 
     # Objects
@@ -239,17 +255,16 @@ end
 
 function observation(p::Env1D, a::Env1DAction, sp::Env1DState)
     if (a == :look || a == :push_and_look)
-        return Deterministic(generate_obs(p, sp))
+        return Deterministic(Env1DObs(generate_obs(p, sp)))
     else
-        return Deterministic([])
+        arobs = Array{Int64,3}(undef, 0, 0, 0)
+        return Deterministic(Env1DObs(arobs))
     end
 end
 
 function is_look_action(act::Env1DAction)
     return (act.type == :look || 
-           act.type == :look_obj_hi ||
-           act.type == :look_obj_lo || 
-           act.type == :look_region)
+            act.type == :push_look)
 end
 
 function is_push_action(act::Env1DAction)
@@ -474,7 +489,7 @@ function POMDPs.gen(p::Env1D, s::Env1DState, act::Env1DAction, rng)
     end
     
     sp = Env1DState(sp_robot_loc, next_grasped, next_objects, fail)
-    obs = observation(p, act, sp)
+    obs = rand(rng, observation(p, act, sp))
     if (length(sp.objects) == 0 || (close(sp.objects[1].pos, p.goal_pos, GOAL_TOLERANCE) && !(sp.grasped == 1)))
         sp.terminal = true
         reward = 1

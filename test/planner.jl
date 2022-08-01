@@ -17,7 +17,7 @@ using POMCPOW
 using Images
 using BasicPOMCP
 
-max_steps = 1000
+max_steps = 2
 
 # solver = POMCPOWSolver(criterion=MaxUCB(20.0))
 # pomdp = BabyPOMDP() # from POMDPModels
@@ -43,8 +43,8 @@ function solve(solver::POMDPPolicySolver, pomdp::POMDPs.POMDP)
 end
 
 function main()
-    problem = POMDPProblem(Env1DGen(), false, 100)
-    algo = POMDPAlgo(POMCPOWSolver(criterion=MaxUCB(20.0), tree_queries=10), false)
+    problem = POMDPProblem(Env1DGen(0.0), false, max_steps)
+    algo = POMDPAlgo(POMCPOWSolver(criterion=MaxUCB(20.0), tree_queries=1000, alpha_action=0.1, k_action=3), false)
     pomdp = problem.pomdp()
     planner = solve(algo.solver, pomdp)
 
@@ -63,7 +63,7 @@ function main()
     s = rand(planner.solver.rng, initialstate(pomdp))
     particles = initialize_belief(up, b)
     is = [1, s, particles]
-    vis_tree = false
+    vis_tree = true
 
     while  is[1] < problem.num_steps
         t, s, b = is
