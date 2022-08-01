@@ -17,7 +17,7 @@ struct Env1DObject
     color::Color
 end
 
-struct Env1DState
+mutable struct Env1DState
     robot_loc::Float64
     grasped::Union{Nothing, Int64} # Object index or nothing
     objects::Vector{Env1DObject}
@@ -64,6 +64,7 @@ struct Env1DAction
 end
 
 mutable struct Env1D <: POMDPs.POMDP{Env1DState, Env1DAction, Matrix{Float64}}
+    goal_pos::Float64
     discount_factor::Float64
 end
 
@@ -79,18 +80,19 @@ RED = Color(1.0, 0, 0)
 GREEN = Color(0, 1.0, 0)
 BLUE = Color(0, 0, 1.0)
 PICK_TOLERANCE = 0.5
+GOAL_TOLERANCE = 0.5
 
 function sample_color(rng)
     return rand(rng, USparseCat([RED, GREEN, BLUE]))
 end
 
 
-function Env1D()
-    return Env1D(0.95)
+function Env1D(goal_pos::Float64)
+    return Env1D(goal_pos, 0.95)
 end
 
-function Env1DGen()
-    return () -> Env1D()
+function Env1DGen(goal_pos::Float64)
+    return () -> Env1D(goal_pos)
 end
 
 discount(p::Env1D) = p.discount_factor
@@ -473,7 +475,11 @@ function POMDPs.gen(p::Env1D, s::Env1DState, act::Env1DAction, rng)
     
     sp = Env1DState(sp_robot_loc, next_grasped, next_objects, fail)
     obs = observation(p, act, sp)
-
+    if (length(sp.objects) == 0 || (close(sp.objects[1].pos, p.goal_pos, GOAL_TOLERANCE) && !(sp.grasped == 1)))
+        sp.terminal = true
+        reward = 1
+    end
+    
     # The goal is placing an object of a certain color at a certain location within an interval
     return (sp=sp, o=obs, r=reward)
 end

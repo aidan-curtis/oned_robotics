@@ -11,7 +11,7 @@ using Random
 GLOBAL_RNG = MersenneTwister(0)
 
 function gen(s::Env1DState, a::Env1DAction)
-    env = Env1D(0.95)
+    env = Env1D(0.0, 0.95)
     sp, o, r = @gen(:sp, :o, :r)(env, s, a, GLOBAL_RNG)
     return sp, o, r
 end
@@ -21,8 +21,6 @@ SOME_OBJECTS = [
     Env1DObject(5, 2, RED),
     Env1DObject(0, 1, GREEN)
 ]
-
-
 
 @testset "Move" begin
     @testset "Move while not holding" begin
@@ -211,4 +209,22 @@ end
         @test sp.objects[2].pos == 1.5
         @test !isterminal(sp)
     end
+end
+
+@testset "Successful plan" begin
+    OBJS = [
+        Env1DObject(1.5, 2, RED)
+    ]
+    s = Env1DState(-10.0, nothing, OBJS)
+    a1 = Env1DAction(:move, 1.5)
+    a2 = Env1DAction(:pick, 0.0)
+    a3 = Env1DAction(:move, 0.0)
+    a4 = Env1DAction(:place, 0.0)
+    s, _, _ = gen(s, a1)
+    s, _, _ = gen(s, a2)
+    s, _, _ = gen(s, a3)
+    sp, _, r = gen(s, a4)
+
+    @test r>0
+    @test isterminal(sp)
 end
