@@ -24,6 +24,10 @@ mutable struct Env1DState
     terminal::Bool
 end
 
+function jitter(state::Env1DState)
+    return Env1DState(state.robot_loc, state.grasped, state.objects, state.terminal)
+end
+
 function Env1DState(robot_loc::Float64,
                     grasped::Union{Nothing, Int64}, # Object index or nothing
                     objects::Vector{Env1DObject})
@@ -67,7 +71,10 @@ struct Env1DObs
     val::Array{Int64, 3}
 end
 
-Base.:(==)(x::Env1DObs, y::Env1DObs) = true
+function Base.:(==)(x::Env1DObs, y::Env1DObs)
+    return x.val == y.val
+end
+
 function Base.hash(obj::Env1DObs, h::UInt)
     return hash(obj.val, h)
 end
@@ -90,6 +97,9 @@ GREEN = Color(0, 1.0, 0)
 BLUE = Color(0, 0, 1.0)
 PICK_TOLERANCE = 0.5
 GOAL_TOLERANCE = 0.5
+HEIGHT = 20
+AGENT_SIZE = 1
+
 
 function sample_color(rng)
     return rand(rng, USparseCat([RED, GREEN, BLUE]))
@@ -104,7 +114,7 @@ function Env1DGen(goal_pos::Float64)
 end
 
 discount(p::Env1D) = p.discount_factor
-isterminal(::Env1D, s::Env1DState) = false
+isterminal(::Env1D, s::Env1DState) = s.terminal
 
 function isterminal(s::Env1DState)
     return s.terminal
@@ -194,29 +204,23 @@ function color_vector(c::Color, alpha::Float64=1.0)
     return [r, g, b]
 end
 
-
 function bound(v, minv, maxv)
     return max(min(v, maxv), minv)
 end
 
 function generate_obs(p::Env1D, s::Env1DState)
     state_image = generate_state_image(p, s)
-    println(size(state_image, 3))
     vf_low = bound(floor(s.robot_loc-FOV/2), 1, size(state_image, 3))
     vf_high = bound(floor(s.robot_loc+FOV/2), 1, size(state_image, 3))
     view_field = Interval(vf_low, vf_high)
-    println(view_field)
-    state_image[:, :, 1:convert(Int64, view_field.lo)] = state_image[:, :, 1:convert(Int64, view_field.lo)].*0
-    state_image[:, :, convert(Int64, view_field.hi):end] = state_image[:, :, convert(Int64, view_field.hi):end].*0
+    state_image[:, HEIGHT/2:HEIGHT/2+1, 1:convert(Int64, view_field.lo)] = state_image[:, :, 1:convert(Int64, view_field.lo)].*0
+    state_image[:, HEIGHT/2:HEIGHT/2+1, convert(Int64, view_field.hi):end] = state_image[:, :, convert(Int64, view_field.hi):end].*0
     return state_image
 end
 
 function generate_state_image(p::Env1D, s::Env1DState)
 
-    HEIGHT = 40
-    AGENT_SIZE = 1
-
-    state_im = ones(3, HEIGHT, floor(Int64, interval_size(WORKSPACE)))
+    state_im = ones(3, HEIGHT, floor(Int64, interval_size(WORKSPACE))).*255.0
     max_coord = size(state_im)[3]
 
     function tf(v::Float64)
@@ -254,7 +258,8 @@ end
 # end
 
 function observation(p::Env1D, a::Env1DAction, sp::Env1DState)
-    if (a == :look || a == :push_and_look)
+    if (a.type == :look || a.type == :push_and_look)
+        # Todo: create a compound bernoulli, or implement the pdf separately
         return Deterministic(Env1DObs(generate_obs(p, sp)))
     else
         arobs = Array{Int64,3}(undef, 0, 0, 0)
@@ -489,6 +494,11 @@ function POMDPs.gen(p::Env1D, s::Env1DState, act::Env1DAction, rng)
     end
     
     sp = Env1DState(sp_robot_loc, next_grasped, next_objects, fail)
+
+    if (fail)
+        reward = -1
+    end
+
     obs = rand(rng, observation(p, act, sp))
     if (length(sp.objects) == 0 || (close(sp.objects[1].pos, p.goal_pos, GOAL_TOLERANCE) && !(sp.grasped == 1)))
         sp.terminal = true
